@@ -1,0 +1,283 @@
+// PlayLearn Prisma Schema — PostgreSQL
+// 业务实体基于 PRD 第 7 章，关联表与反馈表为保证数据完整性而补充的技术实体。
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/.prisma/client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ThemeStatus {
+  active
+  locked
+}
+
+enum GameType {
+  listen_pick
+  drag_spell
+  read_aloud
+  follow_instruction
+}
+
+enum LearningItemType {
+  vocabulary
+  phonics
+}
+
+enum GameSessionStatus {
+  active
+  completed
+  time_locked
+  manual_locked
+}
+
+enum FeedbackCategory {
+  audio
+  image
+  content
+  pronunciation
+  other
+}
+
+enum FeedbackStatus {
+  received
+  reviewing
+  resolved
+}
+
+// ========== 1. 家长主账号 ==========
+model ParentAccount {
+  id           String   @id @default(uuid()) @db.Uuid
+  email        String   @unique
+  passwordHash String
+  displayName  String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  childProfiles ChildProfile[]
+  settings      ParentSettings?
+  feedbacks     ContentFeedback[]
+
+  @@map("parent_accounts")
+}
+
+model ParentSettings {
+  id                  String        @id @default(uuid()) @db.Uuid
+  parentAccountId     String        @unique @db.Uuid
+  parentAccount       ParentAccount @relation(fields: [parentAccountId], references: [id], onDelete: Cascade)
+  sessionTimeLimitMin Int           @default(20)
+  leaderboardOptIn    Boolean       @default(true)
+  shareRequiresAuth   Boolean       @default(true)
+  dailyUnlockLimit    Int           @default(1)
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  @@map("parent_settings")
+}
+
+// ========== 2. 儿童档案 ==========
+model ChildProfile {
+  id               String        @id @default(uuid()) @db.Uuid
+  parentAccountId  String        @db.Uuid
+  parentAccount    ParentAccount @relation(fields: [parentAccountId], references: [id], onDelete: Cascade)
+  nickname         String
+  age              Int
+  avatar           String
+  totalPoints      Int           @default(0)
+  currentLevelId   String?
+  unlockedThemeIds String[]      @default([])
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  masteryRecords   MasteryRecord[]
+  gameSessions     GameSession[]
+  badges           ChildBadge[]
+  leaderboardEntry LeaderboardEntry[]
+  feedbacks        ContentFeedback[]
+
+  @@index([parentAccountId])
+  @@map("child_profiles")
+}
+
+// ========== 3. 主题 ==========
+model Theme {
+  id        String      @id
+  name      String
+  nameEn    String
+  icon      String
+  order     Int         @default(0)
+  status    ThemeStatus @default(active)
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  levels Level[]
+  items  LearningItem[]
+
+  @@map("themes")
+}
+
+// ========== 4. 关卡 ==========
+model Level {
+  id               String   @id
+  themeId          String
+  theme            Theme    @relation(fields: [themeId], references: [id])
+  order            Int
+  title            String
+  gameType         GameType
+  passingThreshold Float    @default(0.6)
+  difficultyTier   Int      @default(1)
+
+  learningItems LevelLearningItem[]
+  sessions      GameSession[]
+
+  @@unique([themeId, order])
+  @@index([themeId, order])
+  @@map("levels")
+}
+
+// 关卡与学习项的显式关联：同一个学习项可以复用到多个关卡，position 保证题目顺序。
+model LevelLearningItem {
+  levelId        String
+  learningItemId String
+  position       Int
+
+  level        Level        @relation(fields: [levelId], references: [id], onDelete: Cascade)
+  learningItem LearningItem @relation(fields: [learningItemId], references: [id], onDelete: Cascade)
+
+  @@id([levelId, learningItemId])
+  @@unique([levelId, position])
+  @@index([learningItemId])
+  @@map("level_learning_items")
+}
+
+// ========== 5. 最小学习单元 ==========
+model LearningItem {
+  id               String           @id
+  type             LearningItemType
+  word             String
+  phonetic         String
+  audioUrl         String
+  imageUrl         String
+  phonicsBreakdown String[]         @default([])
+  distractorIds    String[]         @default([])
+  themeId          String
+  theme            Theme            @relation(fields: [themeId], references: [id])
+
+  levels         LevelLearningItem[]
+  masteryRecords MasteryRecord[]
+  feedbacks      ContentFeedback[]
+
+  @@map("learning_items")
+}
+
+// ========== 6. 掌握度记录 ==========
+model MasteryRecord {
+  id                String       @id @default(uuid()) @db.Uuid
+  childProfileId    String       @db.Uuid
+  childProfile      ChildProfile @relation(fields: [childProfileId], references: [id], onDelete: Cascade)
+  learningItemId    String
+  learningItem      LearningItem @relation(fields: [learningItemId], references: [id])
+  masteryScore      Int          @default(0)
+  reviewCount       Int          @default(0)
+  correctCount      Int          @default(0)
+  lastReviewedAt    DateTime     @default(now())
+  nextReviewDue     DateTime     @default(now())
+  inReviewQueue     Boolean      @default(false)
+  pronunciationBest Int          @default(0)
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  @@unique([childProfileId, learningItemId])
+  @@index([childProfileId, nextReviewDue])
+  @@map("mastery_records")
+}
+
+// ========== 7. 学习会话 ==========
+model GameSession {
+  id              String            @id @default(uuid()) @db.Uuid
+  childProfileId  String            @db.Uuid
+  childProfile    ChildProfile      @relation(fields: [childProfileId], references: [id], onDelete: Cascade)
+  startedAt       DateTime          @default(now())
+  endedAt         DateTime?
+  durationSec     Int               @default(0)
+  levelsCompleted String[]          @default([])
+  itemsAnswered   Int               @default(0)
+  itemsCorrect    Int               @default(0)
+  pointsEarned    Int               @default(0)
+  status          GameSessionStatus @default(active)
+  currentLevelId  String?
+  currentLevel    Level?            @relation(fields: [currentLevelId], references: [id])
+
+  @@index([childProfileId, startedAt])
+  @@map("game_sessions")
+}
+
+// ========== 8. 成就 / 勋章 ==========
+model Badge {
+  id           String   @id
+  name         String
+  description  String
+  icon         String
+  condition    Json
+  pointsReward Int      @default(0)
+  createdAt    DateTime @default(now())
+
+  childBadges ChildBadge[]
+
+  @@map("badges")
+}
+
+model ChildBadge {
+  id             String       @id @default(uuid()) @db.Uuid
+  childProfileId String       @db.Uuid
+  childProfile   ChildProfile @relation(fields: [childProfileId], references: [id], onDelete: Cascade)
+  badgeId        String
+  badge          Badge        @relation(fields: [badgeId], references: [id])
+  earnedAt       DateTime     @default(now())
+
+  @@unique([childProfileId, badgeId])
+  @@map("child_badges")
+}
+
+// ========== 9. 排行榜条目 ==========
+model LeaderboardEntry {
+  id             String       @id @default(uuid()) @db.Uuid
+  childProfileId String       @db.Uuid
+  childProfile   ChildProfile @relation(fields: [childProfileId], references: [id], onDelete: Cascade)
+  nickname       String
+  avatar         String
+  weeklyPoints   Int          @default(0)
+  rank           Int?
+  weekStart      DateTime
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([childProfileId, weekStart])
+  @@index([weekStart, rank])
+  @@map("leaderboard_entries")
+}
+
+// ========== 10. 内容反馈（技术支撑实体） ==========
+model ContentFeedback {
+  id              String           @id @default(uuid()) @db.Uuid
+  parentAccountId String           @db.Uuid
+  childProfileId  String?          @db.Uuid
+  learningItemId  String?
+  category        FeedbackCategory @default(other)
+  message         String
+  status          FeedbackStatus   @default(received)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  parentAccount ParentAccount @relation(fields: [parentAccountId], references: [id], onDelete: Cascade)
+  childProfile  ChildProfile? @relation(fields: [childProfileId], references: [id], onDelete: SetNull)
+  learningItem  LearningItem? @relation(fields: [learningItemId], references: [id], onDelete: SetNull)
+
+  @@index([parentAccountId, createdAt])
+  @@index([learningItemId, status])
+  @@map("content_feedbacks")
+}
