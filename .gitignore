@@ -1,0 +1,36 @@
+# Dependencies and generated output
+node_modules/
+.next/
+out/
+build/
+dist/
+*.tsbuildinfo
+__pycache__/
+*.py[cod]
+
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.vercel/
+
+# Editor, OS, and local design-tool files
+.DS_Store
+.idea/
+.vscode/
+.trae-html-share-packages/
+.temp/
+.preflight/
+
+# Local PRD and UI prototype documents
+/children-english-game-prd/
+/playlearn-prd/
+/chicago-musical-quiz.html
+/ear-piercing-quiz.html
+/monster-high-quiz.html
+*.design
+
+# Logs
+*.log
